@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net"
 	"time"
@@ -17,8 +18,8 @@ import (
 )
 
 const (
-	mgmtServerURL         = ":2650"
-	mgmtConnRetryInterval = 5
+	cfgServerURL         = ":2650"
+	cfgConnRetryInterval = 5
 )
 
 var (
@@ -30,6 +31,7 @@ var (
 func registerModule(client rpc.RegisterClient) error {
 	req := &rpc.RegisterModuleRequest{
 		Module: "amf",
+		Host:   "",
 		Port:   "2701",
 	}
 	_, err := client.DoRegisterModule(context.Background(), req)
@@ -86,13 +88,13 @@ func showAMFSession(t *cliTask, Args []interface{}) {
 	t.Str = "show amf session output"
 }
 
-var parser *cmd.Node
+var cliParser *cmd.Node
 
-func registerAPI(client rpc.RegisterClient) {
+func registerCli(client rpc.RegisterClient) {
 	var clis []rpc.RegisterRequest
 	json.Unmarshal([]byte(cliSpec), &clis)
 
-	parser = cmd.NewParser()
+	cliParser = cmd.NewParser()
 
 	for _, cli := range clis {
 		cli.Module = "amf"
@@ -103,7 +105,75 @@ func registerAPI(client rpc.RegisterClient) {
 		if err != nil {
 			grpclog.Fatalf("client DoRegister failed: %v", err)
 		}
-		parser.InstallLine(cli.Line, cliMap[cli.Name])
+		cliParser.InstallLine(cli.Line, cliMap[cli.Name])
+	}
+}
+
+func commandHandler(command int, path []string) {
+	if command == cmd.Set {
+		fmt.Println("[cmd] add", path)
+	} else {
+		fmt.Println("[cmd] del", path)
+	}
+	ret, fn, args, _ := parser.ParseCmd(path)
+	if ret == cmd.ParseSuccess {
+		fn.(func(int, cmd.Args) int)(command, args)
+	}
+}
+
+func registerCommand(client rpc.ConfigClient) {
+	commandInit()
+
+	stream, err := client.DoConfig(context.Background())
+	if err != nil {
+		grpclog.Fatalf("client DoConfig failed: %v", err)
+	}
+	subscription := []*rpc.SubscribeRequest{
+		{rpc.SubscribeType_COMMAND, "amf"},
+		{rpc.SubscribeType_COMMAND, "nrf-uri"},
+	}
+	msg := &rpc.ConfigRequest{
+		Type:      rpc.ConfigType_SUBSCRIBE_REQUEST,
+		Module:    "AMF",
+		Port:      2701,
+		Subscribe: subscription,
+	}
+	err = stream.Send(msg)
+	if err != nil {
+		grpclog.Fatalf("client DoConfig subscribe failed: %v", err)
+	}
+
+loop:
+	for {
+		conf, err := stream.Recv()
+		if err == io.EOF {
+			break loop
+		}
+		if err != nil {
+			break loop
+		}
+		switch conf.Type {
+		case rpc.ConfigType_COMMIT_START:
+			fmt.Println("[cmd] Commit Start")
+		case rpc.ConfigType_COMMIT_END:
+			fmt.Println("[cmd] Commit End")
+			commandSync()
+			msg := &rpc.ConfigRequest{
+				Type: rpc.ConfigType_API_CALL_FINISHED,
+			}
+			err = stream.Send(msg)
+			if err != nil {
+				grpclog.Fatalf("gRPC stream send error: %v", err)
+				return
+			}
+			if cfgSyncCh != nil {
+				close(cfgSyncCh)
+				cfgSyncCh = nil
+			}
+		case rpc.ConfigType_SET, rpc.ConfigType_DELETE:
+			commandHandler(int(conf.Type), conf.Path)
+		default:
+		}
 	}
 }
 
@@ -111,23 +181,23 @@ func registerAPI(client rpc.RegisterClient) {
 func register() {
 	ch = make(chan interface{})
 	for {
-		conn, err := grpc.Dial(mgmtServerURL,
+		conn, err := grpc.Dial(cfgServerURL,
 			grpc.WithInsecure(),
 			grpc.FailOnNonTempDialError(true),
 			grpc.WithBlock(),
-			grpc.WithTimeout(time.Second*mgmtConnRetryInterval),
+			grpc.WithTimeout(time.Second*cfgConnRetryInterval),
 		)
-		fmt.Println(conn, err)
 		if err == nil {
 			registerModule(rpc.NewRegisterClient(conn))
-			registerAPI(rpc.NewRegisterClient(conn))
+			registerCli(rpc.NewRegisterClient(conn))
+			registerCommand(rpc.NewConfigClient(conn))
 			for {
 				<-ch
 				break
 			}
 			conn.Close()
 		} else {
-			interval := rand.Intn(mgmtConnRetryInterval) + 1
+			interval := rand.Intn(cfgConnRetryInterval) + 1
 			select {
 			// Wait timeout.
 			case <-time.After(time.Second * time.Duration(interval)):
@@ -138,9 +208,11 @@ func register() {
 
 func (s *execServer) DoExec(_ context.Context, req *rpc.ExecRequest) (*rpc.ExecReply, error) {
 	reply := new(rpc.ExecReply)
+
+	// Fill in this when dynamic completion is needed.
 	if req.Type == rpc.ExecType_COMPLETE_DYNAMIC {
-		// Fill in when dynamic completion is needed.
 	}
+
 	return reply, nil
 }
 
@@ -178,7 +250,7 @@ func newCliTask() *cliTask {
 func (s *cliServer) Show(req *rpc.ShowRequest, stream rpc.Show_ShowServer) error {
 	reply := &rpc.ShowReply{}
 
-	result, fn, args, _ := parser.ParseLine(req.Line)
+	result, fn, args, _ := cliParser.ParseLine(req.Line)
 	if result != cmd.ParseSuccess || fn == nil {
 		reply.Str = "% Command can't find: \"" + req.Line + "\"\n"
 		err := stream.Send(reply)

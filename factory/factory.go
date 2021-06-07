@@ -7,6 +7,7 @@ package factory
 import (
 	"fmt"
 	"io/ioutil"
+	"time"
 
 	"gopkg.in/yaml.v2"
 
@@ -15,8 +16,9 @@ import (
 
 var AmfConfig Config
 
-// TODO: Support configuration update from REST api
-func InitConfigFactory(f string) error {
+var cfgSyncCh chan interface{}
+
+func InitConfigFileFactory(f string) error {
 	if content, err := ioutil.ReadFile(f); err != nil {
 		return err
 	} else {
@@ -26,8 +28,22 @@ func InitConfigFactory(f string) error {
 			return yamlErr
 		}
 	}
+	return nil
+}
+
+func InitConfigFactory(f string) error {
+	cfgSyncCh = make(chan interface{})
 
 	CfgMgrStart()
+
+	select {
+	case <-cfgSyncCh:
+		fmt.Println("XXX cfgMgr init config done")
+		return nil
+	case <-time.After(time.Second * 5):
+		fmt.Println("XXX cfgMgr timeout read from config file")
+		return InitConfigFileFactory(f)
+	}
 
 	return nil
 }

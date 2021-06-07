@@ -8,7 +8,7 @@ require (
 	github.com/antonfisher/nested-logrus-formatter v1.3.0
 	github.com/coreswitch/cmd v0.0.0-20171009065211-39afb7adac20
 	github.com/coreswitch/netutil v0.0.0-20180206171925-505fe400e6fb // indirect
-	github.com/coreswitch/openconfigd v0.8.1
+	github.com/coreswitch/openconfigd v0.8.2-0.20201202055446-fcd403f291a7
 	github.com/free5gc/UeauCommon v1.0.0
 	github.com/free5gc/aper v1.0.0
 	github.com/free5gc/fsm v1.0.0
