@@ -2,7 +2,7 @@ module github.com/free5gc/amf
 
 go 1.14
 
-replace github.com/free5gc/openapi v1.0.4 => https://github.com/trilogy-group/free5gc-openapi v1.0.6
+replace github.com/free5gc/openapi v1.0.4 => github.com/trilogy-group/free5gc-openapi v1.0.6
 
 require (
 	git.cs.nctu.edu.tw/calee/sctp v1.1.0
